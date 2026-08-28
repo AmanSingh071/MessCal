@@ -1,8 +1,37 @@
-# MessCal — Vercel Ready
+# 🍽️ MessCal
 
-MessCal turns a monthly college mess-menu PDF into a reviewed monthly calendar and can sync the reviewed meals into a student's Google Calendar.
+> **Your mess menu, directly in your calendar.**
 
-## Local
+🌐 **Live website:** https://messcal.vercel.app
+
+MessCal turns a monthly college mess-menu PDF into a clean, date-based calendar. Students can upload and review their menu, search for dishes, preview the month, and send meals directly to a dedicated **Mess Menu** calendar in Google Calendar.
+
+## ✨ Features
+
+- 📄 Monthly PDF upload
+- 🤖 AI-assisted menu extraction
+- ✏️ Review and edit extracted meals
+- 📅 Automatic weekday-to-date mapping
+- 🗓️ Monthly calendar preview
+- 🔎 **Food search** — find when a dish is served during the month
+- 🔐 Google OAuth and Google Calendar sync
+- 📱 Works with the Google Calendar mobile app
+- 📥 `.ics` calendar export
+- 🗑️ Remove the dedicated Mess Menu calendar
+- 🔌 Disconnect Google Calendar
+- 🌙 **Dark-mode interface**
+- ☁️ Vercel deployment
+
+## 🛠️ Tech stack
+
+- Frontend: HTML, CSS, JavaScript
+- Backend: Node.js + Express
+- PDF processing: `pdf-parse`
+- AI extraction: Anthropic Claude API (optional)
+- Calendar: Google Calendar API + OAuth 2.0
+- Deployment: Vercel
+
+## 🚀 Run locally
 
 ```bash
 npm install
@@ -11,23 +40,16 @@ npm start
 
 Open `http://localhost:3000`.
 
-For local Google Calendar testing, copy `.env.example` to `.env` and set the Google OAuth values plus `SESSION_SECRET`.
+For local Google Calendar testing, copy `.env.example` to `.env` and configure the required OAuth values and `SESSION_SECRET`.
 
-## Vercel
+## 🔐 Security
 
-This project is adapted for Vercel's Express deployment model. Google OAuth state and per-user Google tokens are kept in encrypted HttpOnly cookies instead of global server memory, so the app does not depend on a single long-running Node process.
+Never commit `.env` or real API keys. Use Vercel Environment Variables for production credentials.
 
-Read `VERCEL_SETUP.md` before deploying.
+## 🌐 Live demo
 
-### Important
-- Do not commit `.env` or real API keys.
-- Add production secrets in Vercel Project Settings → Environment Variables.
-- Add the production Google OAuth callback URL to the Google OAuth client after you know your Vercel domain.
-- PDF upload is limited to 4 MB in this Vercel-ready MVP because Vercel Functions have a 4.5 MB request payload limit. For larger PDFs, use direct object-storage uploads in a later version.
+**https://messcal.vercel.app**
 
-## Manage MessCal
-The Export section includes:
-- Remove MessCal events: deletes only Google Calendar events carrying the MessCal private tag.
-- Disconnect Google Calendar: revokes the user's Google OAuth token when possible and clears the local authorization cookie.
+## 👤 Author
 
-This build uses the same existing Vercel project when deployed from a linked folder.
+**Aman Singh** — `AmanSingh071`
