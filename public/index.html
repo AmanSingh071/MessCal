@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111827"><title>MessCal — Your mess menu, on your calendar</title><link rel="stylesheet" href="/style.css"></head><body>
+<div class="nav"><div class="navin"><div class="brand"><span class="mark">MC</span><div><strong>MessCal</strong><small>Your mess menu, on your calendar.</small></div></div><div class="navright"><span id="aiBadge" class="badge">AI ready</span><span id="googleBadge" class="badge muted">Google not connected</span></div></div></div>
+<main>
+<section id="upload" class="hero"><div class="kicker">MESS MENU → CALENDAR</div><h1>Never check the<br><i>noticeboard</i> again.</h1><p>Upload your monthly mess menu. MessCal reads the table, lets you fix anything, and turns every meal into a clean calendar.</p><div class="feature-row"><span>✓ Breakfast</span><span>✓ Lunch</span><span>✓ Snacks</span><span>✓ Dinner</span></div><label class="drop" id="drop"><input id="file" type="file" accept="application/pdf"><div class="uploadmark">↑</div><strong>Drop your menu here</strong><span>or click to browse your PDF</span><small>PDF · up to 4 MB</small></label><div class="sampleline"><button class="secondary" id="sample">Try August 2026 sample</button><span>No API key needed for the included sample.</span></div><div id="status"></div></section>
+<section id="workspace" hidden>
+<div class="progress"><span class="active">01 Review</span><span>02 Preview</span><span>03 Export</span></div>
+<div class="sectionhead"><div><div class="eyebrow">STEP 01 · REVIEW</div><h2>Make sure your menu looks right.</h2><p>Every cell is editable. We preserve <b>/</b> alternatives and <b>&</b> combinations exactly as the source.</p></div><button class="secondary" id="reset">Start over</button></div>
+<div id="warning"></div><div class="tablecard"><table id="tbl"></table></div>
+<div class="settings"><label>Month<select id="month"></select></label><label>Year<input id="year" type="number" min="2000" max="2100"></label><button id="preview">Continue to preview →</button></div>
+<div class="sectionhead previewhead"><div><div class="eyebrow">STEP 02 · PREVIEW</div><h2>See your real calendar dates.</h2><p>Weekdays from the PDF are mapped to the exact dates of your chosen month.</p></div></div><div id="calendar" class="calendarcard"></div>
+<div class="sectionhead exporthead"><div><div class="eyebrow">STEP 03 · EXPORT</div><h2>Your menu is ready. 🎉</h2><p>Send it directly to Google Calendar or download a standard calendar file.</p></div></div>
+<div class="exportgrid"><div class="exportcard"><div class="icon google">G</div><h3>Google Calendar</h3><p>MessCal creates a dedicated <b>Mess Menu</b> calendar and adds every meal to it.</p><a id="connect" class="primary" href="/auth/google">Connect Google Calendar</a><button id="import" class="secondary full">Import reviewed menu</button><div id="googleStatus" class="small"></div></div><div class="exportcard"><div class="icon">↧</div><h3>Download .ics</h3><p>No Google sign-in required. Import the generated file into Google Calendar or another calendar app.</p><button id="ics" class="primary full">Download calendar</button><div class="small">Includes all non-empty meals for the selected month.</div></div></div>
+<div class="source-note"><b>Source note</b><span>The Mess Committee may change or substitute dishes without prior intimation, subject to operational requirements.</span></div><section class="manage-card" id="manageMessCal">
+  <div class="manage-head"><div><div class="eyebrow">SETTINGS</div><h2>Manage MessCal</h2><p>Choose what MessCal is allowed to do with your Google Calendar.</p></div><div class="manage-gear">⚙</div></div>
+  <div class="manage-actions">
+    <button class="secondary manage-btn" id="removeEvents">🗑️ <span><b>Remove MessCal events</b><small>Delete only meals created by MessCal</small></span></button>
+    <button class="danger manage-btn" id="disconnectGoogle">🔌 <span><b>Disconnect Google Calendar</b><small>Stop MessCal from accessing your calendar</small></span></button>
+  </div>
+  <div class="manage-note">Your other Google Calendars and events are not affected. MessCal removes its dedicated “Mess Menu” calendar.</div>
+  <div class="manage-status" id="manageStatus"></div>
+</section>
+
+</section></main><footer>MessCal · built for local use and Vercel · your PDF is processed by the app only when you upload it.</footer><script src="/app.js"></script></body></html>
