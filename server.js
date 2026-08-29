@@ -71,7 +71,8 @@ function eventPayload(e,key,fingerprint){return {summary:eventSummary(e.meal,e.i
 app.post('/api/google/import',async(req,res)=>{
   const wantsStream=String(req.headers.accept||'').includes('application/x-ndjson');
   let closed=false;
-  req.on('close',()=>{closed=true;});
+  req.on('aborted',()=>{closed=true;});
+  res.on('close',()=>{if(!res.writableEnded)closed=true;});
   const send=msg=>{
     if(!wantsStream||closed||res.writableEnded)return;
     res.write(JSON.stringify(msg)+'\n');
