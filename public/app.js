@@ -26,12 +26,12 @@ $('connect').addEventListener('click',()=>{sync();saveMenu();});
 function syncProgressMarkup(msg,started){
   const elapsed=Date.now()-started;
   const done=Number(msg.done||0),total=Math.max(1,Number(msg.total||0));
-  const changed=Number(msg.created||0)+Number(msg.updated||0)+Number(msg.skipped||0);
   const rate=done>0?done/Math.max(elapsed/1000,.25):0;
   const remaining=Math.max(0,total-done);
   const eta=rate>0?remaining/rate:0;
+  const etaText=rate?' · ETA '+formatElapsed(eta*1000):'';
   const pct=Math.min(100,Math.round((done/total)*100));
-  return `<div class="sync-loader sync-progress"><span class="spinner"></span><span><b>${esc(msg.phase||'Syncing Google Calendar…')}</b><small>${done} / ${total} meals processed (${pct}%) · ${msg.created||0} new · ${msg.updated||0} updated · ${msg.skipped||0} already up to date</small><small>${formatElapsed(elapsed)} elapsed${rate?\` · ETA ${formatElapsed(eta*1000)}\`:''}</small><div class="sync-bar"><i style="width:${pct}%"></i></div></span></div>`;
+  return `<div class="sync-loader sync-progress"><span class="spinner"></span><span><b>${esc(msg.phase||'Syncing Google Calendar…')}</b><small>${done} / ${total} meals processed (${pct}%) · ${msg.created||0} new · ${msg.updated||0} updated · ${msg.skipped||0} already up to date</small><small>${formatElapsed(elapsed)} elapsed${etaText}</small><div class="sync-bar"><i style="width:${pct}%"></i></div></span></div>`;
 }
 async function importMenuWithProgress(){
   sync();
