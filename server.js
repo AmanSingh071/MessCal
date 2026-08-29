@@ -63,38 +63,95 @@ app.get('/auth/google',(req,res)=>{const c=oauth(req);if(!c)return res.status(50
 app.get('/auth/google/callback',async(req,res)=>{try{const stored=getState(req);if(!stored||stored.state!==String(req.query.state||''))return res.status(403).send('OAuth state mismatch. Start Google connection again.');const c=oauth(req);if(!c)throw Error('Google credentials are missing.');const {tokens}=await c.getToken(String(req.query.code||''));saveGoogleTokens(res,tokens);clearCookie(res,'messcal_oauth_state');res.redirect('/?google=connected')}catch(e){res.status(500).send(`<h2>Google connection failed</h2><p>${String(e.message).replace(/[<>]/g,'')}</p><p>Check your Google OAuth redirect URI: <code>${process.env.GOOGLE_REDIRECT_URI||`${appUrl(req)}/auth/google/callback`}</code></p><p><a href="/">Back to MessCal</a></p>`)}});
 
 async function getCalendarClient(req,res){const tokens=getGoogleTokens(req);if(!tokens)throw Object.assign(new Error('Connect Google Calendar first.'),{statusCode:401});const c=oauth(req);c.setCredentials(tokens);c.on('tokens',fresh=>{saveGoogleTokens(res,{...tokens,...fresh})});return google.calendar({version:'v3',auth:c});}
-function isRateLimitError(e){const code=e?.code||e?.response?.status;const reason=e?.errors?.[0]?.reason||e?.response?.data?.error?.errors?.[0]?.reason||'';return code===429||code===403||/rateLimit|quota/i.test(String(reason)+' '+String(e?.message||''));}
+function isRateLimitError(e){const code=e?.code||e?.response?.status;const reason=e?.errors?.[0]?.reason||e?.response?.data?.error?.errors?.[0]?.reason||'';return code===429||code===403||/rateLimit|quota|userRateLimit/i.test(String(reason)+' '+String(e?.message||''));}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
-async function googleWithRetry(fn,onRetry){let last;for(let attempt=0;attempt<6;attempt++){try{return await fn()}catch(e){last=e;if(!isRateLimitError(e)||attempt===5)throw e;const wait=Math.min(12000,1000*Math.pow(2,attempt))+Math.floor(Math.random()*500);if(onRetry)onRetry(Math.ceil(wait/1000),attempt+1);await sleep(wait);}}throw last;}
+async function googleWithRetry(fn,onRetry){let last;for(let attempt=0;attempt<7;attempt++){try{return await fn()}catch(e){last=e;if(!isRateLimitError(e)||attempt===6)throw e;const base=Math.min(15000,900*Math.pow(2,attempt));const wait=base+Math.floor(Math.random()*700);onRetry?.(Math.ceil(wait/1000),attempt+1);await sleep(wait);}}throw last;}
+function eventFingerprint(e){return crypto.createHash('sha256').update(JSON.stringify({summary:eventSummary(e.meal,e.items),items:e.items,start:e.start,end:e.end,day:e.day})).digest('hex').slice(0,40);}
+function eventPayload(e,key,fingerprint){return {summary:eventSummary(e.meal,e.items),description:['Mess Menu',`Date: ${e.date}`,`Day: ${e.day}`,`Meal: ${e.meal}`,'','Full Menu:',...e.items.map(i=>'- '+i),'','Source: Monthly Mess Menu PDF'].join('\n'),start:{dateTime:`${e.date}T${e.start}:00`,timeZone:'Asia/Kolkata'},end:{dateTime:`${e.date}T${e.end}:00`,timeZone:'Asia/Kolkata'},extendedProperties:{private:{messcalKey:key,messcalHash:fingerprint}}};}
 app.post('/api/google/import',async(req,res)=>{
   const wantsStream=String(req.headers.accept||'').includes('application/x-ndjson');
-  const send=msg=>{if(wantsStream)res.write(JSON.stringify(msg)+'\\n');};
+  let closed=false;
+  req.on('close',()=>{closed=true;});
+  const send=msg=>{
+    if(!wantsStream||closed||res.writableEnded)return;
+    res.write(JSON.stringify(msg)+'\n');
+    res.flush?.();
+  };
   try{
-    if(wantsStream){res.status(200);res.setHeader('Content-Type','application/x-ndjson; charset=utf-8');res.setHeader('Cache-Control','no-cache, no-transform');res.setHeader('Connection','keep-alive');res.flushHeaders?.();}
+    const evs=buildEvents(req.body);
+    if(!evs.length)throw Error('There are no meals to sync.');
+    if(wantsStream){
+      res.status(200);
+      res.setHeader('Content-Type','application/x-ndjson; charset=utf-8');
+      res.setHeader('Cache-Control','no-cache, no-store, no-transform');
+      res.setHeader('X-Accel-Buffering','no');
+      res.setHeader('Connection','keep-alive');
+      res.flushHeaders?.();
+      send({type:'progress',phase:'Preparing Google Calendar…',done:0,total:evs.length,created:0,updated:0,skipped:0});
+    }
+
     const cal=await getCalendarClient(req,res);
-    const list=await googleWithRetry(()=>cal.calendarList.list({maxResults:250}));
+    send({type:'progress',phase:'Checking your Mess Menu calendar…',done:0,total:evs.length,created:0,updated:0,skipped:0});
+
+    const list=await googleWithRetry(()=>cal.calendarList.list({maxResults:250}),waitSeconds=>send({type:'retry',waitSeconds,done:0,total:evs.length,created:0,updated:0,skipped:0}));
     let found=(list.data.items||[]).find(x=>x.summary==='Mess Menu');
     let calendarId=found?.id;
-    if(!calendarId){const createdCal=await googleWithRetry(()=>cal.calendars.insert({requestBody:{summary:'Mess Menu',description:'MessCal monthly mess menu'}}));calendarId=createdCal.data.id;}
-    const evs=buildEvents(req.body);
+    if(!calendarId){
+      send({type:'progress',phase:'Creating your Mess Menu calendar…',done:0,total:evs.length,created:0,updated:0,skipped:0});
+      const createdCal=await googleWithRetry(()=>cal.calendars.insert({requestBody:{summary:'Mess Menu',description:'MessCal monthly mess menu'}}),waitSeconds=>send({type:'retry',waitSeconds,done:0,total:evs.length,created:0,updated:0,skipped:0}));
+      calendarId=createdCal.data.id;
+    }
+
     const first=evs[0],last=evs[evs.length-1];
     const existingByKey=new Map();
-    if(first&&last){const existing=await googleWithRetry(()=>cal.events.list({calendarId,timeMin:`${first.date}T00:00:00+05:30`,timeMax:`${last.date}T23:59:59+05:30`,singleEvents:true,maxResults:2500}));for(const ev of existing.data.items||[]){const k=ev.extendedProperties?.private?.messcalKey;if(k)existingByKey.set(k,ev);}}
-    let created=0,updated=0,done=0;
-    for(const e of evs){
-      const key=`${e.date}:${e.meal}`;
-      const body={summary:eventSummary(e.meal,e.items),description:['Mess Menu',`Date: ${e.date}`,`Day: ${e.day}`,`Meal: ${e.meal}`,'','Full Menu:',...e.items.map(i=>'- '+i),'','Source: Monthly Mess Menu PDF'].join('\\n'),start:{dateTime:`${e.date}T${e.start}:00`,timeZone:'Asia/Kolkata'},end:{dateTime:`${e.date}T${e.end}:00`,timeZone:'Asia/Kolkata'},extendedProperties:{private:{messcalKey:key}}};
-      const old=existingByKey.get(key);
-      await googleWithRetry(async()=>{if(old){await cal.events.patch({calendarId,eventId:old.id,requestBody:body});updated++;}else{await cal.events.insert({calendarId,requestBody:body});created++;}},(waitSeconds)=>send({type:'retry',waitSeconds,done,total:evs.length,created,updated}));
-      done++;send({type:'progress',done,total:evs.length,created,updated});
-      if(done%8===0)await sleep(120);
+    send({type:'progress',phase:'Checking existing MessCal events…',done:0,total:evs.length,created:0,updated:0,skipped:0});
+    const existing=await googleWithRetry(()=>cal.events.list({calendarId,timeMin:`${first.date}T00:00:00+05:30`,timeMax:`${last.date}T23:59:59+05:30`,singleEvents:true,maxResults:2500}),waitSeconds=>send({type:'retry',waitSeconds,done:0,total:evs.length,created:0,updated:0,skipped:0}));
+    for(const ev of existing.data.items||[]){
+      const k=ev.extendedProperties?.private?.messcalKey;
+      if(k)existingByKey.set(k,ev);
     }
-    const result={ok:true,type:'done',created,updated,count:evs.length,calendarId};
+
+    let created=0,updated=0,skipped=0,done=0;
+    const started=Date.now();
+    for(const e of evs){
+      if(closed)throw Object.assign(new Error('Sync connection was closed.'),{statusCode:499});
+      const key=`${e.date}:${e.meal}`;
+      const fingerprint=eventFingerprint(e);
+      const old=existingByKey.get(key);
+
+      if(old?.extendedProperties?.private?.messcalHash===fingerprint){
+        skipped++;done++;
+        send({type:'progress',phase:'Syncing meals…',done,total:evs.length,created,updated,skipped,elapsedMs:Date.now()-started});
+        continue;
+      }
+
+      const body=eventPayload(e,key,fingerprint);
+      await googleWithRetry(async()=>{
+        if(old){
+          await cal.events.patch({calendarId,eventId:old.id,requestBody:body});
+          updated++;
+        }else{
+          await cal.events.insert({calendarId,requestBody:body});
+          created++;
+        }
+      },waitSeconds=>send({type:'retry',waitSeconds,done,total:evs.length,created,updated,skipped}));
+
+      done++;
+      send({type:'progress',phase:'Syncing meals…',done,total:evs.length,created,updated,skipped,elapsedMs:Date.now()-started});
+
+      // Keep under a conservative per-user request rate to avoid Calendar 403/429 bursts.
+      await sleep(220);
+    }
+
+    const result={ok:true,type:'done',created,updated,skipped,count:evs.length,calendarId,elapsedMs:Date.now()-started};
     if(wantsStream){send(result);return res.end();}
     res.json(result);
-  }catch(e){if(wantsStream){send({type:'error',error:e.message||'Google Calendar import failed.'});return res.end();}res.status(e.statusCode||500).json({error:e.message||'Google Calendar import failed.'});}
+  }catch(e){
+    const message=e.message||'Google Calendar import failed.';
+    if(wantsStream){send({type:'error',error:message});return res.end();}
+    res.status(e.statusCode||500).json({error:message});
+  }
 });
-
 app.get('/api/google/status',(req,res)=>{
   res.json({connected:Boolean(getGoogleTokens(req))});
 });
