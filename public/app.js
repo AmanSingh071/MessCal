@@ -23,10 +23,82 @@ function renderFoodSearch(query){const box=$('foodSearchResults');if(!box||!menu
 $('foodSearchInput')?.addEventListener('input',e=>renderFoodSearch(e.target.value));
 $('ics').onclick=async()=>{try{sync();const r=await fetch('/api/ics',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(menu)});if(!r.ok)throw Error((await r.json()).error);const blob=await r.blob(),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${menu.month}-${menu.year}-mess-menu.ics`;a.click()}catch(e){alert(e.message)}};
 $('connect').addEventListener('click',()=>{sync();saveMenu();});
-async function importMenuWithProgress(){sync();const status=$('googleStatus'),button=$('import');const started=Date.now();button.disabled=true;button.textContent='Syncing…';status.innerHTML='<div class="sync-loader"><span class="spinner"></span><span><b>Preparing Google Calendar sync…</b><small>Calculating menu events…</small></span></div>';try{const response=await fetch('/api/google/import',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/x-ndjson'},body:JSON.stringify(menu)});if(!response.ok){let data;try{data=await response.json()}catch{}throw Error(data?.error||'Google Calendar import failed.')}if(!response.body)throw Error('Live sync progress is not supported by this browser.');const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='',last=null;while(true){const {done,value}=await reader.read();if(done)break;buffer+=decoder.decode(value,{stream:true});const lines=buffer.split('\n');buffer=lines.pop();for(const line of lines){if(!line.trim())continue;const msg=JSON.parse(line);last=msg;if(msg.type==='progress'){const elapsed=Date.now()-started;const rate=msg.done/Math.max(elapsed/1000,.1);const remaining=Math.max(0,msg.total-msg.done);const eta=rate>0?remaining/rate:0;status.innerHTML=`<div class="sync-loader"><span class="spinner"></span><span><b>Syncing ${msg.done} / ${msg.total} meals</b><small>${formatElapsed(elapsed)} elapsed · ETA ${formatElapsed(eta*1000)} · ${msg.created} new, ${msg.updated} updated${msg.retrying?' · retrying after Google rate limit…':''}</small></span></div>`;}else if(msg.type==='retry'){status.innerHTML=`<div class="sync-loader"><span class="spinner"></span><span><b>Google temporarily rate-limited the sync</b><small>Waiting ${msg.waitSeconds}s, then automatically continuing…</small></span></div>`;}else if(msg.type==='done'){status.innerHTML=`<div class="status-success">✓ ${msg.count} meals synced in ${formatElapsed(Date.now()-started)} (${msg.created} new, ${msg.updated} updated).</div>`;}else if(msg.type==='error'){throw Error(msg.error||'Google Calendar import failed.');}}}if(last?.type!=='done')throw Error('Sync ended before completion. Please try again.');$('googleBadge').textContent='Google connected'}catch(e){status.innerHTML=`<div class="status-error">Error: ${esc(e.message)}</div>`}finally{button.disabled=false;button.textContent='Import reviewed menu'}}
+function syncProgressMarkup(msg,started){
+  const elapsed=Date.now()-started;
+  const done=Number(msg.done||0),total=Math.max(1,Number(msg.total||0));
+  const changed=Number(msg.created||0)+Number(msg.updated||0)+Number(msg.skipped||0);
+  const rate=done>0?done/Math.max(elapsed/1000,.25):0;
+  const remaining=Math.max(0,total-done);
+  const eta=rate>0?remaining/rate:0;
+  const pct=Math.min(100,Math.round((done/total)*100));
+  return `<div class="sync-loader sync-progress"><span class="spinner"></span><span><b>${esc(msg.phase||'Syncing Google Calendar…')}</b><small>${done} / ${total} meals processed (${pct}%) · ${msg.created||0} new · ${msg.updated||0} updated · ${msg.skipped||0} already up to date</small><small>${formatElapsed(elapsed)} elapsed${rate?\` · ETA ${formatElapsed(eta*1000)}\`:''}</small><div class="sync-bar"><i style="width:${pct}%"></i></div></span></div>`;
+}
+async function importMenuWithProgress(){
+  sync();
+  const status=$('googleStatus'),button=$('import'),started=Date.now();
+  button.disabled=true;button.textContent='Syncing…';
+  status.innerHTML=syncProgressMarkup({phase:'Starting secure Google Calendar sync…',done:0,total:1,created:0,updated:0,skipped:0},started);
+
+  let finalMessage=null;
+  const handleMessage=msg=>{
+    if(msg.type==='error')throw Error(msg.error||'Google Calendar import failed.');
+    if(msg.type==='retry'){
+      status.innerHTML=`<div class="sync-loader sync-progress"><span class="spinner"></span><span><b>Google is temporarily slowing this sync</b><small>${msg.done||0} / ${msg.total||0} meals already processed · waiting about ${msg.waitSeconds}s, then continuing automatically…</small></span></div>`;
+      return;
+    }
+    if(msg.type==='progress'){
+      status.innerHTML=syncProgressMarkup(msg,started);
+      return;
+    }
+    if(msg.type==='done'){
+      finalMessage=msg;
+      status.innerHTML=`<div class="status-success">✓ ${msg.count} meals processed in ${formatElapsed(msg.elapsedMs||Date.now()-started)} — ${msg.created} new, ${msg.updated} updated, ${msg.skipped||0} already up to date.</div>`;
+    }
+  };
+
+  try{
+    const response=await fetch('/api/google/import',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/x-ndjson'},body:JSON.stringify(menu)});
+    if(!response.ok){
+      let data;try{data=await response.json()}catch{}
+      throw Error(data?.error||'Google Calendar import failed.');
+    }
+
+    // Read every chunk and also parse the final buffered tail. The old code could
+    // miss the final "done" message when the stream ended without another newline.
+    const reader=response.body?.getReader();
+    if(!reader)throw Error('Your browser could not start the live sync stream.');
+    const decoder=new TextDecoder();
+    let buffer='';
+    const consumeLine=line=>{
+      const trimmed=line.trim();
+      if(!trimmed)return;
+      handleMessage(JSON.parse(trimmed));
+    };
+
+    while(true){
+      const {done,value}=await reader.read();
+      if(value){
+        buffer+=decoder.decode(value,{stream:!done});
+        const lines=buffer.split('\n');
+        buffer=lines.pop()||'';
+        for(const line of lines)consumeLine(line);
+      }
+      if(done)break;
+    }
+    buffer+=decoder.decode();
+    consumeLine(buffer);
+
+    if(!finalMessage)throw Error('The connection ended before MessCal received the final confirmation. Please check your Google Calendar and retry if needed.');
+    $('googleBadge').textContent='Google connected';
+  }catch(e){
+    status.innerHTML=`<div class="status-error">Sync paused: ${esc(e.message)}</div>`;
+  }finally{
+    button.disabled=false;button.textContent='Import reviewed menu';
+  }
+}
 $('import').onclick=importMenuWithProgress;
 $('reset').onclick=()=>{localStorage.removeItem(STORAGE_KEY);location.href='/'};
-if(new URLSearchParams(location.search).get('google')==='connected'){const saved=loadMenu();history.replaceState({},'','/');if(saved){menu=saved;openWorkspace();$('googleStatus').textContent='✓ Google connected. Adding your reviewed menu to Google Calendar…';setTimeout(async()=>{try{const j=await api('/api/google/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(menu)});$('googleStatus').textContent=`✓ ${j.count} meals are now in your Google Calendar (${j.created} new, ${j.updated} updated). Open the Google Calendar app on your phone and make sure the “Mess Menu” calendar is visible.`;$('googleBadge').textContent='Google connected'}catch(e){$('googleStatus').textContent='Google connected, but import failed: '+e.message+' — click “Import reviewed menu” to retry.';}},250)}else{$('googleStatus').textContent='Google connected, but no reviewed menu was saved. Upload/review your menu first.';config()}}else{const saved=loadMenu();if(saved){menu=saved;openWorkspace()}}
+if(new URLSearchParams(location.search).get('google')==='connected'){const saved=loadMenu();history.replaceState({},'','/');if(saved){menu=saved;openWorkspace();$('googleStatus').textContent='✓ Google connected. Adding your reviewed menu to Google Calendar…';setTimeout(()=>importMenuWithProgress(),350)}else{$('googleStatus').textContent='Google connected, but no reviewed menu was saved. Upload/review your menu first.';config()}}else{const saved=loadMenu();if(saved){menu=saved;openWorkspace()}}
 const removeBtn=document.getElementById("removeEvents"),disconnectBtn=document.getElementById("disconnectGoogle"),manageStatus=document.getElementById("manageStatus");
 async function jsonResponse(r){const text=await r.text();let data;try{data=JSON.parse(text)}catch{throw Error(text.replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim()||`Request failed (${r.status})`)}if(!r.ok)throw Error(data.error||`Request failed (${r.status})`);return data}
 if(removeBtn)removeBtn.onclick=async()=>{if(!confirm("Remove all MessCal events from your Google Calendar?\n\nOnly events created by MessCal will be removed."))return;removeBtn.disabled=true;manageStatus.textContent="Removing MessCal events…";try{const r=await fetch("/api/google/remove-events",{method:"POST",headers:{"Accept":"application/json"}}),d=await jsonResponse(r);manageStatus.textContent=d.calendarRemoved?"✓ Mess Menu calendar and all MessCal events removed.":`✓ Removed ${d.removed||0} MessCal event(s).`}catch(e){manageStatus.textContent="Error: "+e.message}finally{removeBtn.disabled=false}};
