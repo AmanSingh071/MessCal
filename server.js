@@ -62,7 +62,7 @@ app.post('/api/ics',(req,res)=>{try{const m=safeMenu(req.body),stamp=new Date().
 app.get('/auth/google',(req,res)=>{const c=oauth(req);if(!c)return res.status(500).send('Google Calendar is not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Vercel Environment Variables.');const state=crypto.randomBytes(24).toString('hex');setCookie(res,'messcal_oauth_state',seal({state,createdAt:Date.now()}),{maxAge:10*60*1000});const url=c.generateAuthUrl({access_type:'offline',prompt:'consent',state,scope:['https://www.googleapis.com/auth/calendar']});res.redirect(url)});
 app.get('/auth/google/callback',async(req,res)=>{try{const stored=getState(req);if(!stored||stored.state!==String(req.query.state||''))return res.status(403).send('OAuth state mismatch. Start Google connection again.');const c=oauth(req);if(!c)throw Error('Google credentials are missing.');const {tokens}=await c.getToken(String(req.query.code||''));saveGoogleTokens(res,tokens);clearCookie(res,'messcal_oauth_state');res.redirect('/?google=connected')}catch(e){res.status(500).send(`<h2>Google connection failed</h2><p>${String(e.message).replace(/[<>]/g,'')}</p><p>Check your Google OAuth redirect URI: <code>${process.env.GOOGLE_REDIRECT_URI||`${appUrl(req)}/auth/google/callback`}</code></p><p><a href="/">Back to MessCal</a></p>`)}});
 
-async function getCalendarClient(req,res){const tokens=getGoogleTokens(req);if(!tokens)throw Object.assign(new Error('Connect Google Calendar first.'),{statusCode:401});const c=oauth(req);c.setCredentials(tokens);c.on('tokens',fresh=>{saveGoogleTokens(res,{...tokens,...fresh})});return google.calendar({version:'v3',auth:c});}
+async function getCalendarClient(req,res){const tokens=getGoogleTokens(req);if(!tokens)throw Object.assign(new Error('Connect Google Calendar first.'),{statusCode:401});const c=oauth(req);c.setCredentials(tokens);c.on('tokens',fresh=>{if(!res.headersSent)saveGoogleTokens(res,{...tokens,...fresh})});await c.getAccessToken();return google.calendar({version:'v3',auth:c});}
 function isRateLimitError(e){const code=e?.code||e?.response?.status;const reason=e?.errors?.[0]?.reason||e?.response?.data?.error?.errors?.[0]?.reason||'';return code===429||code===403||/rateLimit|quota|userRateLimit/i.test(String(reason)+' '+String(e?.message||''));}
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 async function googleWithRetry(fn,onRetry){let last;for(let attempt=0;attempt<7;attempt++){try{return await fn()}catch(e){last=e;if(!isRateLimitError(e)||attempt===6)throw e;const base=Math.min(15000,900*Math.pow(2,attempt));const wait=base+Math.floor(Math.random()*700);onRetry?.(Math.ceil(wait/1000),attempt+1);await sleep(wait);}}throw last;}
@@ -81,6 +81,8 @@ app.post('/api/google/import',async(req,res)=>{
   try{
     const evs=buildEvents(req.body);
     if(!evs.length)throw Error('There are no meals to sync.');
+    // Refresh/check the OAuth token before response headers are streamed.
+    const cal=await getCalendarClient(req,res);
     if(wantsStream){
       res.status(200);
       res.setHeader('Content-Type','application/x-ndjson; charset=utf-8');
@@ -91,7 +93,6 @@ app.post('/api/google/import',async(req,res)=>{
       send({type:'progress',phase:'Preparing Google Calendar…',done:0,total:evs.length,created:0,updated:0,skipped:0});
     }
 
-    const cal=await getCalendarClient(req,res);
     send({type:'progress',phase:'Checking your Mess Menu calendar…',done:0,total:evs.length,created:0,updated:0,skipped:0});
 
     const list=await googleWithRetry(()=>cal.calendarList.list({maxResults:250}),waitSeconds=>send({type:'retry',waitSeconds,done:0,total:evs.length,created:0,updated:0,skipped:0}));
